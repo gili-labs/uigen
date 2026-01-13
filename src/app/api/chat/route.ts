@@ -1,6 +1,6 @@
 import type { FileNode } from "@/lib/file-system";
 import { VirtualFileSystem } from "@/lib/file-system";
-import { streamText, appendResponseMessages } from "ai";
+import { streamText, convertToModelMessages, UIMessage } from "ai";
 import { buildStrReplaceTool } from "@/lib/tools/str-replace";
 import { buildFileManagerTool } from "@/lib/tools/file-manager";
 import { prisma } from "@/lib/prisma";
@@ -10,19 +10,26 @@ import { generationPrompt } from "@/lib/prompts/generation";
 
 export async function POST(req: Request) {
   const {
-    messages,
+    messages: rawMessages,
     files,
     projectId,
-  }: { messages: any[]; files: Record<string, FileNode>; projectId?: string } =
+  }: { messages: UIMessage[]; files: Record<string, FileNode>; projectId?: string } =
     await req.json();
 
-  messages.unshift({
-    role: "system",
-    content: generationPrompt,
-    providerOptions: {
-      anthropic: { cacheControl: { type: "ephemeral" } },
+  // Convert UIMessages to model messages format
+  const modelMessages = await convertToModelMessages(rawMessages || []);
+
+  // Add system message at the beginning
+  const messages = [
+    {
+      role: "system" as const,
+      content: generationPrompt,
+      providerOptions: {
+        anthropic: { cacheControl: { type: "ephemeral" } },
+      },
     },
-  });
+    ...modelMessages,
+  ];
 
   // Reconstruct the VirtualFileSystem from serialized data
   const fileSystem = new VirtualFileSystem();
@@ -54,13 +61,10 @@ export async function POST(req: Request) {
             return;
           }
 
-          // Get the messages from the response
+          // Get the messages from the response and combine with original messages
           const responseMessages = response.messages || [];
-          // Combine original messages with response messages
-          const allMessages = appendResponseMessages({
-            messages: [...messages.filter((m) => m.role !== "system")],
-            responseMessages,
-          });
+          const userMessages = messages.filter((m: any) => m.role !== "system");
+          const allMessages = [...userMessages, ...responseMessages];
 
           await prisma.project.update({
             where: {
@@ -79,7 +83,7 @@ export async function POST(req: Request) {
     },
   });
 
-  return result.toDataStreamResponse();
+  return result.toUIMessageStreamResponse();
 }
 
 export const maxDuration = 120;

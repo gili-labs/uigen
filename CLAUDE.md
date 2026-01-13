@@ -20,7 +20,7 @@ npm run lint
 # Run all tests
 npm test
 
-# Run a single test file
+# Run a single test file (config in vitest.config.mts)
 npx vitest run src/lib/__tests__/file-system.test.ts
 
 # Reset database

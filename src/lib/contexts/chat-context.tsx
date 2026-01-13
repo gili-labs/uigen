@@ -5,19 +5,22 @@ import {
   useContext,
   ReactNode,
   useEffect,
+  useState,
+  useCallback,
+  useMemo,
 } from "react";
 import { useChat as useAIChat } from "@ai-sdk/react";
-import { Message } from "ai";
+import { UIMessage, DefaultChatTransport } from "ai";
 import { useFileSystem } from "./file-system-context";
 import { setHasAnonWork } from "@/lib/anon-work-tracker";
 
 interface ChatContextProps {
   projectId?: string;
-  initialMessages?: Message[];
+  initialMessages?: UIMessage[];
 }
 
 interface ChatContextType {
-  messages: Message[];
+  messages: UIMessage[];
   input: string;
   handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   handleSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
@@ -32,24 +35,54 @@ export function ChatProvider({
   initialMessages = [],
 }: ChatContextProps & { children: ReactNode }) {
   const { fileSystem, handleToolCall } = useFileSystem();
+  const [input, setInput] = useState("");
 
-  const {
-    messages,
-    input,
-    handleInputChange,
-    handleSubmit,
-    status,
-  } = useAIChat({
-    api: "/api/chat",
-    initialMessages,
-    body: {
-      files: fileSystem.serialize(),
-      projectId,
-    },
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        prepareSendMessagesRequest: async ({ messages, body }) => ({
+          body: {
+            ...body,
+            messages,
+            files: fileSystem.serialize(),
+            projectId,
+          },
+        }),
+      }),
+    [fileSystem, projectId]
+  );
+
+  const { messages, status, sendMessage } = useAIChat({
+    transport,
+    messages: initialMessages,
     onToolCall: ({ toolCall }) => {
-      handleToolCall(toolCall);
+      // Sync local file system state when tool calls arrive
+      // The tool is already executed on the server, we just update local state
+      handleToolCall({
+        toolName: toolCall.toolName,
+        args: toolCall.input,
+      });
     },
   });
+
+  const handleInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      setInput(e.target.value);
+    },
+    []
+  );
+
+  const handleSubmit = useCallback(
+    (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      if (input.trim()) {
+        sendMessage({ text: input });
+        setInput("");
+      }
+    },
+    [input, sendMessage]
+  );
 
   // Track anonymous work
   useEffect(() => {
@@ -65,7 +98,7 @@ export function ChatProvider({
         input,
         handleInputChange,
         handleSubmit,
-        status,
+        status: status ?? "idle",
       }}
     >
       {children}
